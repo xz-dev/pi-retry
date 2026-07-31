@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -7,7 +7,12 @@ import {
   isRetryableAssistantError,
   type AssistantMessage,
 } from "@earendil-works/pi-ai";
-import { RETRY_MARKER, classifyError, loadConfig } from "../src/retry.js";
+import {
+  RETRY_MARKER,
+  classifyError,
+  classifyErrorForContext,
+  loadConfig,
+} from "../src/retry.js";
 
 function errorMessage(errorMessage: string): AssistantMessage {
   return {
@@ -82,11 +87,19 @@ test("matching error is classified exactly once", () => {
   assert.equal(classifyError(first, config, true), undefined);
 });
 
-test("does not change matching errors when Pi retry is disabled", () => {
-  const result = classifyError(
+test("does not change matching errors when file-backed Pi retry is disabled", (t) => {
+  const agentDir = temporaryAgentDir(t);
+  mkdirSync(join(agentDir, "project"));
+  writeFileSync(
+    join(agentDir, "settings.json"),
+    JSON.stringify({ retry: { enabled: false } }),
+  );
+
+  const result = classifyErrorForContext(
     errorMessage("Error: OpenAI API error (520): 520 status code (no body)"),
     loadConfig("/path/that/does/not/exist"),
-    false,
+    { cwd: join(agentDir, "project"), isProjectTrusted: () => false },
+    agentDir,
   );
 
   assert.equal(result, undefined);
@@ -105,6 +118,13 @@ test("does not override quota, billing, usage-limit, or context-overflow errors"
     "Provider usage-limit error",
     "Provider budget exceeded",
     "Provider error: available balance required",
+    "HTTP 402 Payment Required",
+    "Account credits exhausted",
+    "Credit balance depleted",
+    "Account balance exhausted",
+    "Spending cap reached",
+    "Hard limit reached",
+    "Payment method required",
     "Error: input exceeds the context window",
     "Error: too many tokens",
   ];

@@ -21,7 +21,7 @@ export interface RetryConfig {
 }
 
 const PROTECTED_LIMIT_PATTERN =
-  /GoUsageLimitError|FreeUsageLimitError|usage.?limit|available balance|quota|budget|billing/i;
+  /GoUsageLimitError|FreeUsageLimitError|usage.?limit|available balance|account balance|credit balance|credits? (?:exhausted|depleted)|quota|budget|billing|payment required|payment method|spending cap|hard limit|\b402\b/i;
 
 export function loadConfig(agentDir = getAgentDir()): RetryConfig {
   const path = join(agentDir, CONFIG_FILE);
@@ -67,10 +67,19 @@ export function classifyError(
   };
 }
 
-function isRetryEnabled(ctx: Pick<ExtensionContext, "cwd" | "isProjectTrusted">): boolean {
-  return SettingsManager.create(ctx.cwd, getAgentDir(), {
+type RetryContext = Pick<ExtensionContext, "cwd" | "isProjectTrusted">;
+
+export function classifyErrorForContext(
+  message: AssistantMessage,
+  config: RetryConfig,
+  ctx: RetryContext,
+  agentDir = getAgentDir(),
+): AssistantMessage | undefined {
+  const retryEnabled = SettingsManager.create(ctx.cwd, agentDir, {
     projectTrusted: ctx.isProjectTrusted(),
   }).getRetrySettings().enabled;
+
+  return classifyError(message, config, retryEnabled);
 }
 
 export default function retry(pi: ExtensionAPI): void {
@@ -79,7 +88,7 @@ export default function retry(pi: ExtensionAPI): void {
   pi.on("message_end", (event, ctx) => {
     if (event.message.role !== "assistant") return;
 
-    const message = classifyError(event.message, config, isRetryEnabled(ctx));
+    const message = classifyErrorForContext(event.message, config, ctx);
     if (message) return { message };
   });
 }
