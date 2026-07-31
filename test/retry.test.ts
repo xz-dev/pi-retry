@@ -106,7 +106,7 @@ test("does not change matching errors when file-backed Pi retry is disabled", (t
 });
 
 test("does not override quota, billing, usage-limit, or context-overflow errors", () => {
-  const broad = { include: ["error"] };
+  const broad = { include: ["error", "credits"] };
   const protectedErrors = [
     "OpenAI error: insufficient_quota",
     "Provider error: quota exceeded",
