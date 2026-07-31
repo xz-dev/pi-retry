@@ -125,6 +125,11 @@ test("does not override quota, billing, usage-limit, or context-overflow errors"
     "Spending cap reached",
     "Hard limit reached",
     "Payment method required",
+    "Payment declined error",
+    "Payment-required error",
+    "Spending limit reached error",
+    "Hard-limit reached error",
+    "Account credits have been exhausted",
     "Error: input exceeds the context window",
     "Error: too many tokens",
   ];

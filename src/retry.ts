@@ -21,7 +21,7 @@ export interface RetryConfig {
 }
 
 const PROTECTED_LIMIT_PATTERN =
-  /GoUsageLimitError|FreeUsageLimitError|usage.?limit|available balance|account balance|credit balance|credits? (?:exhausted|depleted)|quota|budget|billing|payment required|payment method|spending cap|hard limit|\b402\b/i;
+  /GoUsageLimitError|FreeUsageLimitError|usage.?limit|available balance|account balance|credit balance|credits?.{0,24}(?:exhausted|depleted)|quota|budget|billing|payment|spending.?(?:cap|limit)|hard.?limit|\b402\b/i;
 
 export function loadConfig(agentDir = getAgentDir()): RetryConfig {
   const path = join(agentDir, CONFIG_FILE);
