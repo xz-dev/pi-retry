@@ -12,17 +12,7 @@ pi install git:github.com/xz-dev/pi-retry
 
 Restart Pi after installation.
 
-## Context overflow recovery
-
-A finalized assistant error containing this phrase triggers Pi's native context compaction and one automatic retry:
-
-```text
-Reduce the prompt or route to a model with a larger input limit
-```
-
-The original error remains visible. Automatic recovery requires Pi's `compaction.enabled` setting.
-
-## Configure retries
+## Configure
 
 The default retry include matches this error without any configuration:
 
@@ -37,11 +27,19 @@ To replace the defaults, create `$PI_CODING_AGENT_DIR/pi-retry.json` (normally `
   "include": [
     "OpenAI API error (520)",
     "custom transient error"
+  ],
+  "compact": [
+    "Reduce the prompt or route to a model with a larger input limit"
   ]
 }
 ```
 
-`include` is an array of case-insensitive literal substrings. Empty strings are ignored. The configuration is global only and is read when the extension loads; use `/reload` after changing it.
+Both arrays contain case-insensitive literal substrings; empty strings are ignored:
+
+- `include` replaces the default retry matches.
+- `compact` defaults to empty and normalizes matching errors for Pi's native context compaction and one automatic retry.
+
+The original error remains visible. Compaction recovery requires Pi's `compaction.enabled` setting. Configuration is global only and is read when the extension loads; use `/reload` after changing it.
 
 An invalid configuration disables custom classification instead of breaking Pi.
 
@@ -55,7 +53,7 @@ A finalized assistant error is marked for Pi's native retry only when all of the
 - Pi does not already classify the error as retryable;
 - the error is not a quota, usage-limit, budget, billing, or context-overflow failure.
 
-Context-overflow normalization is independent of retry configuration and never converts the error into an ordinary retry. Pi owns compaction and its bounded retry.
+Configured `compact` matches are independent of retry configuration and never become ordinary retries. Pi owns compaction and its bounded retry.
 
 The extension intentionally has no timer, stall watchdog, UI, command, or runtime dependency. Configure provider/stream inactivity with Pi's `httpIdleTimeoutMs`; configure retry attempts and backoff through Pi's native `retry` settings.
 

@@ -47,6 +47,7 @@ test("uses the OpenAI 520 no-body error as the default include", () => {
   const config = loadConfig("/path/that/does/not/exist");
   assert.deepEqual(config, {
     include: ["OpenAI API error (520): 520 status code (no body)"],
+    compact: [],
   });
   assert.ok(
     classifyError(
@@ -61,7 +62,7 @@ test("configured include strings replace defaults and match case-insensitively",
   const agentDir = temporaryAgentDir(t);
   writeFileSync(
     join(agentDir, "pi-retry.json"),
-    JSON.stringify({ include: ["CUSTOM TRANSIENT FAILURE"] }),
+    JSON.stringify({ include: ["CUSTOM TRANSIENT FAILURE"], compact: [] }),
   );
 
   const config = loadConfig(agentDir);
@@ -107,23 +108,37 @@ test("does not change matching errors when file-backed Pi retry is disabled", (t
   assert.equal(result, undefined);
 });
 
-test("normalizes configured input-limit errors for native compaction recovery", () => {
+test("normalizes configured compact strings for native compaction recovery", (t) => {
+  const agentDir = temporaryAgentDir(t);
+  writeFileSync(
+    join(agentDir, "pi-retry.json"),
+    JSON.stringify({
+      include: ["error"],
+      compact: ["REDUCE THE PROMPT OR ROUTE TO A MODEL WITH A LARGER INPUT LIMIT"],
+    }),
+  );
+  const config = loadConfig(agentDir);
   const original = errorMessage(
     "Error: Input exceeds maximum input tokens for codex/gpt-5.6-sol: estimated 379871 input tokens, max input 353400. Reduce the prompt or route to a model with a larger input limit.",
   );
-  const normalized = normalizeContextOverflow(original);
+  const normalized = normalizeContextOverflow(original, config.compact);
 
   assert.ok(normalized?.errorMessage?.startsWith("context_length_exceeded:"));
   assert.match(normalized?.errorMessage ?? "", /Reduce the prompt or route to a model with a larger input limit/);
   assert.equal(isContextOverflow(original), false);
   assert.equal(isContextOverflow(normalized!), true);
   assert.equal(isRetryableAssistantError(normalized!), false);
-  assert.equal(classifyError(original, { include: ["error"] }, true), undefined);
-  assert.equal(normalizeContextOverflow(errorMessage("HTTP 400 invalid request")), undefined);
+  assert.equal(classifyError(original, config, true), undefined);
+  assert.equal(normalizeContextOverflow(original, []), undefined);
+  assert.equal(normalizeContextOverflow(errorMessage("HTTP 400 invalid request"), config.compact), undefined);
+  assert.equal(
+    normalizeContextOverflow(errorMessage("Provider quota exceeded"), ["quota exceeded"]),
+    undefined,
+  );
 });
 
 test("does not override quota, billing, usage-limit, or context-overflow errors", () => {
-  const broad = { include: ["error", "credits"] };
+  const broad = { include: ["error", "credits"], compact: [] };
   const protectedErrors = [
     "OpenAI error: insufficient_quota",
     "Provider error: quota exceeded",
@@ -160,13 +175,16 @@ test("leaves non-errors, unrelated errors, and native retryable errors unchanged
   const matchingSuccess = { ...errorMessage("custom error"), stopReason: "stop" as const };
   const matchingAbort = { ...errorMessage("custom error"), stopReason: "aborted" as const };
 
-  assert.equal(classifyError(matchingSuccess, { include: ["custom"] }, true), undefined);
-  assert.equal(classifyError(matchingAbort, { include: ["custom"] }, true), undefined);
-  assert.equal(classifyError(errorMessage("HTTP 400 invalid request"), { include: ["520"] }, true), undefined);
+  assert.equal(classifyError(matchingSuccess, { include: ["custom"], compact: [] }, true), undefined);
+  assert.equal(classifyError(matchingAbort, { include: ["custom"], compact: [] }, true), undefined);
+  assert.equal(
+    classifyError(errorMessage("HTTP 400 invalid request"), { include: ["520"], compact: [] }, true),
+    undefined,
+  );
   assert.equal(
     classifyError(
       errorMessage("OpenAI API error (503): service unavailable"),
-      { include: ["503"] },
+      { include: ["503"], compact: [] },
       true,
     ),
     undefined,
@@ -178,11 +196,20 @@ test("invalid configuration fails closed", (t) => {
   const configPath = join(agentDir, "pi-retry.json");
 
   writeFileSync(configPath, "not json");
-  assert.deepEqual(loadConfig(agentDir), { include: [] });
+  assert.deepEqual(loadConfig(agentDir), { include: [], compact: [] });
 
   writeFileSync(configPath, JSON.stringify({ include: [520] }));
-  assert.deepEqual(loadConfig(agentDir), { include: [] });
+  assert.deepEqual(loadConfig(agentDir), { include: [], compact: [] });
 
-  writeFileSync(configPath, JSON.stringify({ include: ["  ", " transient "] }));
-  assert.deepEqual(loadConfig(agentDir), { include: ["transient"] });
+  writeFileSync(configPath, JSON.stringify({ include: [], compact: [520] }));
+  assert.deepEqual(loadConfig(agentDir), { include: [], compact: [] });
+
+  writeFileSync(
+    configPath,
+    JSON.stringify({ include: ["  ", " transient "], compact: ["  ", " overflow "] }),
+  );
+  assert.deepEqual(loadConfig(agentDir), {
+    include: ["transient"],
+    compact: ["overflow"],
+  });
 });

@@ -15,11 +15,10 @@ import {
 export const CONFIG_FILE = "pi-retry.json";
 export const DEFAULT_INCLUDE = ["OpenAI API error (520): 520 status code (no body)"];
 export const RETRY_MARKER = "[pi-retry]";
-export const CONTEXT_OVERFLOW_HINT =
-  "Reduce the prompt or route to a model with a larger input limit";
 
 export interface RetryConfig {
   include: string[];
+  compact: string[];
 }
 
 const PROTECTED_LIMIT_PATTERN =
@@ -27,38 +26,49 @@ const PROTECTED_LIMIT_PATTERN =
 
 export function loadConfig(agentDir = getAgentDir()): RetryConfig {
   const path = join(agentDir, CONFIG_FILE);
-  if (!existsSync(path)) return { include: [...DEFAULT_INCLUDE] };
+  if (!existsSync(path)) return { include: [...DEFAULT_INCLUDE], compact: [] };
 
   try {
     const value: unknown = JSON.parse(readFileSync(path, "utf8"));
     if (!value || typeof value !== "object" || !("include" in value)) {
-      return { include: [] };
+      return { include: [], compact: [] };
     }
 
-    const include = (value as { include?: unknown }).include;
-    if (!Array.isArray(include) || include.some((item) => typeof item !== "string")) {
-      return { include: [] };
+    const { include, compact = [] } = value as {
+      include?: unknown;
+      compact?: unknown;
+    };
+    if (
+      !Array.isArray(include) ||
+      include.some((item) => typeof item !== "string") ||
+      !Array.isArray(compact) ||
+      compact.some((item) => typeof item !== "string")
+    ) {
+      return { include: [], compact: [] };
     }
 
-    return { include: include.map((item) => item.trim()).filter(Boolean) };
+    return {
+      include: include.map((item) => item.trim()).filter(Boolean),
+      compact: compact.map((item) => item.trim()).filter(Boolean),
+    };
   } catch {
-    return { include: [] };
+    return { include: [], compact: [] };
   }
 }
 
-function hasContextOverflowHint(message: AssistantMessage): boolean {
-  return (
-    message.stopReason === "error" &&
-    !!message.errorMessage
-      ?.toLowerCase()
-      .includes(CONTEXT_OVERFLOW_HINT.toLowerCase())
-  );
+function matches(message: AssistantMessage, values: string[]): boolean {
+  if (message.stopReason !== "error" || !message.errorMessage) return false;
+
+  const error = message.errorMessage.toLowerCase();
+  return values.some((value) => error.includes(value.toLowerCase()));
 }
 
 export function normalizeContextOverflow(
   message: AssistantMessage,
+  compact: string[],
 ): AssistantMessage | undefined {
-  if (!hasContextOverflowHint(message) || isContextOverflow(message)) return;
+  if (PROTECTED_LIMIT_PATTERN.test(message.errorMessage ?? "")) return;
+  if (!matches(message, compact) || isContextOverflow(message)) return;
 
   return {
     ...message,
@@ -74,14 +84,10 @@ export function classifyError(
   if (!retryEnabled || message.stopReason !== "error" || !message.errorMessage) return;
   if (message.errorMessage.includes(RETRY_MARKER)) return;
   if (PROTECTED_LIMIT_PATTERN.test(message.errorMessage)) return;
-  if (hasContextOverflowHint(message) || isContextOverflow(message)) return;
+  if (matches(message, config.compact) || isContextOverflow(message)) return;
   if (isRetryableAssistantError(message)) return;
 
-  const normalizedError = message.errorMessage.toLowerCase();
-  const matched = config.include.find((value) =>
-    normalizedError.includes(value.toLowerCase()),
-  );
-  if (!matched) return;
+  if (!matches(message, config.include)) return;
 
   return {
     ...message,
@@ -110,7 +116,7 @@ export default function retry(pi: ExtensionAPI): void {
   pi.on("message_end", (event, ctx) => {
     if (event.message.role !== "assistant") return;
 
-    const overflow = normalizeContextOverflow(event.message);
+    const overflow = normalizeContextOverflow(event.message, config.compact);
     if (overflow) return { message: overflow };
 
     const retry = classifyErrorForContext(event.message, config, ctx);
