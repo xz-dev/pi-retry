@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import {
+  isContextOverflow,
   isRetryableAssistantError,
   type AssistantMessage,
 } from "@earendil-works/pi-ai";
@@ -12,6 +13,7 @@ import {
   classifyError,
   classifyErrorForContext,
   loadConfig,
+  normalizeContextOverflow,
 } from "../src/retry.js";
 
 function errorMessage(errorMessage: string): AssistantMessage {
@@ -103,6 +105,21 @@ test("does not change matching errors when file-backed Pi retry is disabled", (t
   );
 
   assert.equal(result, undefined);
+});
+
+test("normalizes configured input-limit errors for native compaction recovery", () => {
+  const original = errorMessage(
+    "Error: Input exceeds maximum input tokens for codex/gpt-5.6-sol: estimated 379871 input tokens, max input 353400. Reduce the prompt or route to a model with a larger input limit.",
+  );
+  const normalized = normalizeContextOverflow(original);
+
+  assert.ok(normalized?.errorMessage?.startsWith("context_length_exceeded:"));
+  assert.match(normalized?.errorMessage ?? "", /Reduce the prompt or route to a model with a larger input limit/);
+  assert.equal(isContextOverflow(original), false);
+  assert.equal(isContextOverflow(normalized!), true);
+  assert.equal(isRetryableAssistantError(normalized!), false);
+  assert.equal(classifyError(original, { include: ["error"] }, true), undefined);
+  assert.equal(normalizeContextOverflow(errorMessage("HTTP 400 invalid request")), undefined);
 });
 
 test("does not override quota, billing, usage-limit, or context-overflow errors", () => {

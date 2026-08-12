@@ -15,6 +15,8 @@ import {
 export const CONFIG_FILE = "pi-retry.json";
 export const DEFAULT_INCLUDE = ["OpenAI API error (520): 520 status code (no body)"];
 export const RETRY_MARKER = "[pi-retry]";
+export const CONTEXT_OVERFLOW_HINT =
+  "Reduce the prompt or route to a model with a larger input limit";
 
 export interface RetryConfig {
   include: string[];
@@ -44,6 +46,26 @@ export function loadConfig(agentDir = getAgentDir()): RetryConfig {
   }
 }
 
+function hasContextOverflowHint(message: AssistantMessage): boolean {
+  return (
+    message.stopReason === "error" &&
+    !!message.errorMessage
+      ?.toLowerCase()
+      .includes(CONTEXT_OVERFLOW_HINT.toLowerCase())
+  );
+}
+
+export function normalizeContextOverflow(
+  message: AssistantMessage,
+): AssistantMessage | undefined {
+  if (!hasContextOverflowHint(message) || isContextOverflow(message)) return;
+
+  return {
+    ...message,
+    errorMessage: `context_length_exceeded: ${message.errorMessage}`,
+  };
+}
+
 export function classifyError(
   message: AssistantMessage,
   config: RetryConfig,
@@ -52,7 +74,7 @@ export function classifyError(
   if (!retryEnabled || message.stopReason !== "error" || !message.errorMessage) return;
   if (message.errorMessage.includes(RETRY_MARKER)) return;
   if (PROTECTED_LIMIT_PATTERN.test(message.errorMessage)) return;
-  if (isContextOverflow(message)) return;
+  if (hasContextOverflowHint(message) || isContextOverflow(message)) return;
   if (isRetryableAssistantError(message)) return;
 
   const normalizedError = message.errorMessage.toLowerCase();
@@ -88,7 +110,10 @@ export default function retry(pi: ExtensionAPI): void {
   pi.on("message_end", (event, ctx) => {
     if (event.message.role !== "assistant") return;
 
-    const message = classifyErrorForContext(event.message, config, ctx);
-    if (message) return { message };
+    const overflow = normalizeContextOverflow(event.message);
+    if (overflow) return { message: overflow };
+
+    const retry = classifyErrorForContext(event.message, config, ctx);
+    if (retry) return { message: retry };
   });
 }

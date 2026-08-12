@@ -1,7 +1,7 @@
 {
   "name": "pi-retry",
   "version": "0.1.0",
-  "description": "Configurable retry hints for transient Pi provider errors",
+  "description": "Recovery hints for Pi provider errors",
   "type": "module",
   "files": [
     "index.ts",

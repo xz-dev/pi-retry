@@ -1,8 +1,8 @@
 # pi-retry
 
-Minimal configurable retry hints for transient provider errors that Pi does not yet classify.
+Minimal recovery hints for provider errors that Pi does not yet classify.
 
-`pi-retry` does not implement a retry loop. It marks matching finalized provider errors for Pi's native retry path, so Pi remains responsible for retry count, exponential backoff, cancellation, and reporting.
+`pi-retry` does not implement retry or compaction loops. It normalizes known context-overflow errors for Pi's native compact-and-retry path and marks configured transient errors for Pi's native retry path.
 
 ## Install
 
@@ -12,9 +12,19 @@ pi install git:github.com/xz-dev/pi-retry
 
 Restart Pi after installation.
 
-## Configure
+## Context overflow recovery
 
-The default include matches this error without any configuration:
+A finalized assistant error containing this phrase triggers Pi's native context compaction and one automatic retry:
+
+```text
+Reduce the prompt or route to a model with a larger input limit
+```
+
+The original error remains visible. Automatic recovery requires Pi's `compaction.enabled` setting.
+
+## Configure retries
+
+The default retry include matches this error without any configuration:
 
 ```text
 Error: OpenAI API error (520): 520 status code (no body)
@@ -44,6 +54,8 @@ A finalized assistant error is marked for Pi's native retry only when all of the
 - one configured substring matches;
 - Pi does not already classify the error as retryable;
 - the error is not a quota, usage-limit, budget, billing, or context-overflow failure.
+
+Context-overflow normalization is independent of retry configuration and never converts the error into an ordinary retry. Pi owns compaction and its bounded retry.
 
 The extension intentionally has no timer, stall watchdog, UI, command, or runtime dependency. Configure provider/stream inactivity with Pi's `httpIdleTimeoutMs`; configure retry attempts and backoff through Pi's native `retry` settings.
 
