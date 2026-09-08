@@ -13,7 +13,19 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 export const CONFIG_FILE = "pi-retry.json";
-export const DEFAULT_INCLUDE = ["OpenAI API error (520): 520 status code (no body)"];
+export const DEFAULT_INCLUDE = [
+  "OpenAI API error (520): 520 status code (no body)",
+  "OpenAI API error (522): 522 status code (no body)",
+  "OpenAI API error (530): 530 status code (no body)",
+  "unknown certificate verification error",
+  "upstream_error: Upstream request failed",
+  "Upstream stream failed before completion.",
+  "Service temporarily unavailable due to resource pressure. Retry shortly.",
+  "are cooling down (reset after 5s)",
+  "Responses WebSocket closed (1006): Connection ended",
+  "Connection error.",
+];
+const DEFAULT_COMPACT = ["Reduce the prompt or route to a model with a larger input limit"];
 export const RETRY_MARKER = "[pi-retry]";
 
 export interface RetryConfig {
@@ -26,19 +38,19 @@ const PROTECTED_LIMIT_PATTERN =
 
 export function loadConfig(agentDir = getAgentDir()): RetryConfig {
   const path = join(agentDir, CONFIG_FILE);
-  if (!existsSync(path)) return { include: [...DEFAULT_INCLUDE], compact: [] };
-
   try {
-    const value: unknown = JSON.parse(readFileSync(path, "utf8"));
-    if (!value || typeof value !== "object" || !("include" in value)) {
+    const value: unknown = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
       return { include: [], compact: [] };
     }
 
-    const { include, compact = [] } = value as {
+    const { include = [], compact = [], clearDefaults = false } = value as {
       include?: unknown;
       compact?: unknown;
+      clearDefaults?: unknown;
     };
     if (
+      typeof clearDefaults !== "boolean" ||
       !Array.isArray(include) ||
       include.some((item) => typeof item !== "string") ||
       !Array.isArray(compact) ||
@@ -48,8 +60,8 @@ export function loadConfig(agentDir = getAgentDir()): RetryConfig {
     }
 
     return {
-      include: include.map((item) => item.trim()).filter(Boolean),
-      compact: compact.map((item) => item.trim()).filter(Boolean),
+      include: [...(clearDefaults ? [] : DEFAULT_INCLUDE), ...include.map((item) => item.trim()).filter(Boolean)],
+      compact: [...(clearDefaults ? [] : DEFAULT_COMPACT), ...compact.map((item) => item.trim()).filter(Boolean)],
     };
   } catch {
     return { include: [], compact: [] };
