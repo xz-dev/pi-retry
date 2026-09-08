@@ -14,34 +14,48 @@ Restart Pi after installation.
 
 ## Configure
 
-The default retry include matches this error without any configuration:
+No configuration is needed: pi-retry ships with 10 retry rules and one context-compaction rule. See the [recovery specification](openspec/specs/error-recovery/spec.md) for the exact defaults and behavior.
 
-```text
-Error: OpenAI API error (520): 520 status code (no body)
-```
-
-To replace the defaults, create `$PI_CODING_AGENT_DIR/pi-retry.json` (normally `~/.pi/agent/pi-retry.json`):
+To append rules, create `$PI_CODING_AGENT_DIR/pi-retry.json` (normally `~/.pi/agent/pi-retry.json`):
 
 ```json
 {
-  "include": [
-    "OpenAI API error (520)",
-    "custom transient error"
-  ],
-  "compact": [
-    "Reduce the prompt or route to a model with a larger input limit"
-  ]
+  "include": ["custom transient error"],
+  "compact": ["custom input overflow"]
 }
 ```
 
-Both arrays contain case-insensitive literal substrings; empty strings are ignored:
+All fields are optional:
 
-- `include` replaces the default retry matches.
-- `compact` defaults to empty and normalizes matching errors for Pi's native context compaction and one automatic retry.
+- `include`: retry substrings to append to the built-in include list.
+- `compact`: overflow substrings to append to the built-in compact list.
+- `clearDefaults`: boolean, default `false`. Set `true` to clear **both** built-in lists before adding user rules.
+
+Strings are trimmed and matched as case-insensitive literal substrings, not regular expressions; blank strings are ignored. `{}`, omitted arrays, and empty arrays retain the defaults unless `clearDefaults` is `true`. Compact-only configuration is valid.
+
+To replace the defaults with only your own rules:
+
+```json
+{
+  "clearDefaults": true,
+  "include": ["custom transient error"],
+  "compact": []
+}
+```
+
+To disable all pi-retry classification without changing Pi's native recovery settings:
+
+```json
+{
+  "clearDefaults": true
+}
+```
+
+**Upgrading from replacement behavior:** add `clearDefaults: true` to an existing configuration if you want to keep only its rules. An empty `include` array no longer disables built-in retry rules on its own. No user configuration is rewritten automatically.
 
 The original error remains visible. Compaction recovery requires Pi's `compaction.enabled` setting. Configuration is global only and is read when the extension loads; use `/reload` after changing it.
 
-An invalid configuration disables custom classification instead of breaking Pi.
+Invalid JSON, a read error, or an invalid recognized field disables both pi-retry rule lists instead of falling back to defaults or breaking Pi. Arrays must contain only strings; `clearDefaults` must be a boolean. Unknown properties are ignored.
 
 ## Behavior
 
@@ -49,11 +63,11 @@ A finalized assistant error is marked for Pi's native retry only when all of the
 
 - Pi's `retry.enabled` setting is on;
 - `stopReason` is `error`;
-- one configured substring matches;
+- one active include substring matches;
 - Pi does not already classify the error as retryable;
 - the error is not a quota, usage-limit, budget, billing, or context-overflow failure.
 
-Configured `compact` matches are independent of retry configuration and never become ordinary retries. Pi owns compaction and its bounded retry.
+Active `compact` matches are independent of retry configuration and never become ordinary retries. Pi owns compaction and its bounded retry.
 
 The extension intentionally has no timer, stall watchdog, UI, command, or runtime dependency. Configure provider/stream inactivity with Pi's `httpIdleTimeoutMs`; configure retry attempts and backoff through Pi's native `retry` settings.
 
