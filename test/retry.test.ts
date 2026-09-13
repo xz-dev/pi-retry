@@ -52,6 +52,7 @@ const expectedDefaults = {
     "unknown certificate verification error",
     "upstream_error: Upstream request failed",
     "Upstream stream failed before completion.",
+    "stream disconnected before completion",
     "Service temporarily unavailable due to resource pressure. Retry shortly.",
     "are cooling down (reset after 5s)",
     "Responses WebSocket closed (1006): Connection ended",
@@ -65,13 +66,7 @@ test("uses built-in recovery rules without creating a configuration file", (t) =
   const config = loadConfig(agentDir);
   assert.deepEqual(config, expectedDefaults);
   assert.equal(existsSync(join(agentDir, "pi-retry.json")), false);
-  assert.ok(
-    classifyError(
-      errorMessage("Error: OpenAI API error (520): 520 status code (no body)"),
-      config,
-      true,
-    ),
-  );
+  assert.ok(classifyError(errorMessage("Error: stream disconnected before completion"), config, true));
   const overflow = normalizeContextOverflow(errorMessage(config.compact[0]), config.compact);
   assert.ok(overflow);
   assert.equal(isContextOverflow(overflow), true);
