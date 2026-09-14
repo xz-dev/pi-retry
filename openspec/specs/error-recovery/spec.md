@@ -31,6 +31,7 @@ The extension SHALL provide the following built-in rule sets without requiring a
 | include | `Upstream stream failed before completion.` |
 | include | `stream disconnected before completion` |
 | include | `Service temporarily unavailable due to resource pressure. Retry shortly.` |
+| include | `Upstream service temporarily unavailable` |
 | include | `are cooling down (reset after 5s)` |
 | include | `Responses WebSocket closed (1006): Connection ended` |
 | include | `Connection error.` |
@@ -41,7 +42,7 @@ Built-in matches SHALL remain subject to the recovery eligibility, precedence, a
 #### Scenario: No configuration file
 
 - **WHEN** the extension loads without a global recovery configuration file
-- **THEN** all 11 built-in include rules and the built-in compact rule are available
+- **THEN** all 12 built-in include rules and the built-in compact rule are available
 - **AND** no configuration file is created
 
 #### Scenario: Empty configuration object

@@ -22,6 +22,7 @@ export const DEFAULT_INCLUDE = [
   "Upstream stream failed before completion.",
   "stream disconnected before completion",
   "Service temporarily unavailable due to resource pressure. Retry shortly.",
+  "Upstream service temporarily unavailable",
   "are cooling down (reset after 5s)",
   "Responses WebSocket closed (1006): Connection ended",
   "Connection error.",
