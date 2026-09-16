@@ -58,6 +58,7 @@ const expectedDefaults = {
     "are cooling down (reset after 5s)",
     "Responses WebSocket closed (1006): Connection ended",
     "Connection error.",
+    "unexpected EOF.",
   ],
   compact: ["Reduce the prompt or route to a model with a larger input limit"],
 };
@@ -68,6 +69,7 @@ test("uses built-in recovery rules without creating a configuration file", (t) =
   assert.deepEqual(config, expectedDefaults);
   assert.equal(existsSync(join(agentDir, "pi-retry.json")), false);
   assert.ok(classifyError(errorMessage("Error: stream disconnected before completion"), config, true));
+  assert.ok(classifyError(errorMessage("Error: unexpected EOF."), config, true));
   const overflow = normalizeContextOverflow(errorMessage(config.compact[0]), config.compact);
   assert.ok(overflow);
   assert.equal(isContextOverflow(overflow), true);

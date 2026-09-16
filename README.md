@@ -14,7 +14,7 @@ Restart Pi after installation.
 
 ## Configure
 
-No configuration is needed: pi-retry ships with 12 retry rules and one context-compaction rule. See the [recovery specification](openspec/specs/error-recovery/spec.md) for the exact defaults and behavior.
+No configuration is needed: pi-retry ships with 13 retry rules and one context-compaction rule. See the [recovery specification](openspec/specs/error-recovery/spec.md) for the exact defaults and behavior.
 
 To append rules, create `$PI_CODING_AGENT_DIR/pi-retry.json` (normally `~/.pi/agent/pi-retry.json`):
 

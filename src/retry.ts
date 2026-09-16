@@ -26,6 +26,7 @@ export const DEFAULT_INCLUDE = [
   "are cooling down (reset after 5s)",
   "Responses WebSocket closed (1006): Connection ended",
   "Connection error.",
+  "unexpected EOF.",
 ];
 const DEFAULT_COMPACT = ["Reduce the prompt or route to a model with a larger input limit"];
 export const RETRY_MARKER = "[pi-retry]";
