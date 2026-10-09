@@ -5,7 +5,7 @@ import { once } from "node:events";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
-import { createAssistantMessageEventStream, getModel, type AssistantMessage } from "@earendil-works/pi-ai/compat";
+import { createAssistantMessageEventStream, getModel, isRetryableAssistantError, type AssistantMessage } from "@earendil-works/pi-ai/compat";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -33,7 +33,7 @@ function response(failed: boolean, errorText = 'API error (502): {"retry_after":
 
 async function setup(t: TestContext, extension: ExtensionFactory, options: {
   maxRetries?: number; http?: boolean; config?: unknown; delayMs?: number; retryAfter?: number;
-  ui?: boolean; rawBody?: boolean; repeatMessageEnd?: boolean; errorText?: string;
+  ui?: boolean; rawBody?: boolean; repeatMessageEnd?: boolean; errorText?: string; failures?: number;
 } = {}) {
   const directory = mkdtempSync(join("/var/tmp", "pi-retry-lifecycle-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
@@ -71,7 +71,7 @@ async function setup(t: TestContext, extension: ExtensionFactory, options: {
       requests.push(performance.now());
       const stream = createAssistantMessageEventStream();
       queueMicrotask(() => {
-        const message = response(requests.length === 1, options.errorText);
+        const message = response(requests.length <= (options.failures ?? 1), options.errorText);
         stream.push({ type: "start", partial: message });
         if (message.stopReason === "error") stream.push({ type: "error", reason: "error", error: message });
         else stream.push({ type: "done", reason: "stop", message });
@@ -122,6 +122,31 @@ async function setup(t: TestContext, extension: ExtensionFactory, options: {
     await session.bindExtensions({ uiContext: { ...ui, setStatus: (_key, value) => { statuses.push(value); } } });
   }
   return { session, requests, statuses };
+}
+
+for (const example of [
+  { name: "default-on", config: {}, requests: 2 },
+  { name: "default-on with cleared lists", config: { defaultRetry: true, clearDefaults: true }, requests: 2 },
+  { name: "include-only without a match", config: { defaultRetry: false }, requests: 1 },
+  { name: "include-only with a match", config: { defaultRetry: false, include: ["custom gateway failure"] }, requests: 2 },
+  { name: "excluded default-on failure", config: { exclude: ["custom gateway failure"] }, requests: 1 },
+  { name: "excluded include-only match", config: {
+    defaultRetry: false, include: ["custom gateway failure"], exclude: ["custom gateway failure"],
+  }, requests: 1 },
+]) {
+  test(`extension retry policy: ${example.name}`, async (t) => {
+    const errorText = "custom gateway failure";
+    assert.equal(isRetryableAssistantError(response(true, errorText)), false);
+    const { session, requests } = await setup(t, () => {}, { errorText, config: example.config });
+    await session.prompt("Exercise extension-only retry selection.");
+    assert.equal(requests.length, example.requests);
+    const last = session.messages.at(-1);
+    assert.equal(last?.role, "assistant");
+    if (last?.role === "assistant") {
+      assert.equal(last.stopReason, example.requests === 1 ? "error" : "stop");
+      if (example.requests === 1) assert.equal(last.errorMessage, errorText);
+    }
+  });
 }
 
 test("native retry removes the failed response before the next extension context boundary", async (t) => {
@@ -221,6 +246,9 @@ for (const example of [
   { name: "user override with an SDK-visible body", rawBody: false, waitMs: 250, retryAfter: 0.6, native: 100, expected: 250 },
   { name: "user override with a top-level body stripped by the SDK", rawBody: true, waitMs: 250, retryAfter: 0.6, native: 100, expected: 250 },
   { name: "visible server hint without an include match", rawBody: false, retryAfter: 0.25, native: 100, expected: 250 },
+  { name: "native server waiting with defaultRetry off", rawBody: false, defaultRetry: false, retryAfter: 0.25, native: 100, expected: 250 },
+  { name: "native user waiting with defaultRetry off", rawBody: false, defaultRetry: false, waitMs: 250, retryAfter: 0.6, native: 100, expected: 250 },
+  { name: "excluded native error ignores user and server waits", rawBody: false, exclude: ["502"], waitMs: 800, retryAfter: 1, native: 100, expected: 100 },
   { name: "native fallback when the SDK omits the body", rawBody: true, retryAfter: 0.6, native: 100, expected: 100 },
   { name: "explicit zero overrides a visible server hint", rawBody: false, waitMs: 0, retryAfter: 0.6, native: 100, expected: 100 },
   { name: "duplicate observation keeps the original deadline", rawBody: false, waitMs: 250, retryAfter: 0.6, native: 100, expected: 250, repeatMessageEnd: true },
@@ -238,9 +266,16 @@ for (const example of [
       });
     }, { http: true, ui: true, delayMs: example.native, retryAfter: example.retryAfter, rawBody: example.rawBody,
       repeatMessageEnd: example.repeatMessageEnd,
-      config: { include: example.waitMs === undefined ? [] : [{ match: "502", waitMs: example.waitMs }] } });
+      config: { defaultRetry: example.defaultRetry ?? true, exclude: example.exclude ?? [],
+        include: example.waitMs === undefined ? [] : [{ match: "502", waitMs: example.waitMs }] } });
     await session.prompt("Retry this local HTTP failure.");
     assert.equal(requests.length, 2);
+    const last = session.messages.at(-1);
+    assert.equal(last?.role, "assistant");
+    if (last?.role === "assistant") {
+      assert.equal(last.stopReason, "error");
+      assert.equal(last.errorMessage, originalError, "native failures must stay unchanged");
+    }
     const interval = requests[1] - failedAt;
     assert.ok(interval >= example.expected - 1, `retry too early: ${interval}ms`);
     assert.ok(interval < example.expected + 90, `waits were added or precedence changed: ${interval}ms`);
@@ -273,6 +308,49 @@ for (const example of [
     const interval = requests[1] - failedAt;
     assert.ok(interval >= example.expected - 1, `synthetic marker suppressed the server wait: ${interval}ms`);
     assert.ok(interval < example.expected + 150, `synthetic marker imposed an unrelated wait: ${interval}ms`);
+  });
+}
+
+test("default-eligible server waiting counts native backoff without an include match", async (t) => {
+  const errorText = 'custom gateway failure {"retry_after":0.3}';
+  assert.equal(isRetryableAssistantError(response(true, errorText)), false);
+  let failedAt = 0;
+  const { session, requests, statuses } = await setup(t, (pi) => {
+    pi.on("message_end", (event) => {
+      if (event.message.role === "assistant" && event.message.stopReason === "error") failedAt = performance.now();
+    });
+  }, { errorText, ui: true, delayMs: 150, config: { clearDefaults: true } });
+  await session.prompt("Use the server wait on a default-eligible failure.");
+  assert.equal(requests.length, 2);
+  const interval = requests[1] - failedAt;
+  assert.ok(interval >= 299, `server wait missing: ${interval}ms`);
+  assert.ok(interval < 420, `native and server waits were added: ${interval}ms`);
+  assert.ok(statuses.some((value) => value?.includes("Retry cooldown")));
+  assert.equal(statuses.at(-1), undefined);
+  t.diagnostic(`Default-eligible retry waited ${Math.round(interval)}ms; server 300ms, native 150ms`);
+});
+
+for (const maxRetries of [0, 2]) {
+  test(`default-eligible failures respect maxRetries=${maxRetries} and clear exhausted waiting`, async (t) => {
+    const errorText = 'custom gateway failure {"retry_after":0.25}';
+    assert.equal(isRetryableAssistantError(response(true, errorText)), false);
+    const { session, requests, statuses } = await setup(t, () => {}, {
+      errorText, maxRetries, failures: maxRetries + 1, delayMs: 10, ui: true,
+    });
+    await session.prompt("Fail until the native budget is exhausted.");
+    assert.equal(requests.length, maxRetries + 1);
+    const last = session.messages.at(-1);
+    assert.equal(last?.role, "assistant");
+    if (last?.role === "assistant") {
+      assert.equal(last.stopReason, "error");
+      assert.ok(last.errorMessage?.startsWith(errorText));
+    }
+    assert.equal(statuses.filter((value) => value?.includes("Retry cooldown")).length, maxRetries);
+    const freshAt = performance.now();
+    await session.prompt("This fresh request must not inherit the exhausted cooldown.");
+    assert.equal(requests.length, maxRetries + 2);
+    assert.ok(requests.at(-1)! - freshAt < 200, "exhausted waiting leaked to a fresh request");
+    assert.equal(statuses.at(-1), undefined);
   });
 }
 

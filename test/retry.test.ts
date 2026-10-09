@@ -45,7 +45,11 @@ function temporaryAgentDir(t: TestContext): string {
   return directory;
 }
 
+const includeOnly: RetryConfig = { defaultRetry: false, exclude: [], include: [], compact: [] };
+
 const expectedDefaults = {
+  defaultRetry: true,
+  exclude: [],
   include: [
     "OpenAI API error (520): 520 status code (no body)",
     "OpenAI API error (522): 522 status code (no body)",
@@ -81,25 +85,32 @@ test("partial configuration appends rules unless both default lists are cleared"
   const configPath = join(agentDir, "pi-retry.json");
   const cases: { input: unknown; expected: RetryConfig }[] = [
     { input: {}, expected: expectedDefaults },
-    { input: { include: [], compact: [] }, expected: expectedDefaults },
+    { input: { include: [], compact: [], exclude: [] }, expected: expectedDefaults },
+    { input: { defaultRetry: true }, expected: expectedDefaults },
+    { input: { defaultRetry: false }, expected: { ...expectedDefaults, defaultRetry: false } },
     { input: { clearDefaults: false }, expected: expectedDefaults },
     { input: { unused: true }, expected: expectedDefaults },
     {
       input: { compact: ["custom overflow"] },
-      expected: { include: expectedDefaults.include, compact: [...expectedDefaults.compact, "custom overflow"] },
+      expected: { ...expectedDefaults, compact: [...expectedDefaults.compact, "custom overflow"] },
     },
-    { input: { clearDefaults: true }, expected: { include: [], compact: [] } },
+    { input: { clearDefaults: true }, expected: { ...includeOnly, defaultRetry: true } },
+    { input: { clearDefaults: true, defaultRetry: false }, expected: includeOnly },
+    {
+      input: { clearDefaults: true, exclude: ["  ", " TERMINAL.FAILURE ", "*"] },
+      expected: { ...includeOnly, defaultRetry: true, exclude: ["TERMINAL.FAILURE", "*"] },
+    },
     {
       input: { clearDefaults: true, include: ["custom transient error"] },
-      expected: { include: ["custom transient error"], compact: [] },
+      expected: { ...includeOnly, defaultRetry: true, include: ["custom transient error"] },
     },
     {
       input: { clearDefaults: true, compact: ["custom overflow"] },
-      expected: { include: [], compact: ["custom overflow"] },
+      expected: { ...includeOnly, defaultRetry: true, compact: ["custom overflow"] },
     },
     {
-      input: { clearDefaults: true, include: ["  ", " TRANSIENT.FAILURE "], compact: ["  ", " overflow "] },
-      expected: { include: ["TRANSIENT.FAILURE"], compact: ["overflow"] },
+      input: { defaultRetry: false, clearDefaults: true, include: ["  ", " TRANSIENT.FAILURE "], compact: ["  ", " overflow "] },
+      expected: { ...includeOnly, include: ["TRANSIENT.FAILURE"], compact: ["overflow"] },
     },
   ];
 
@@ -111,7 +122,7 @@ test("partial configuration appends rules unless both default lists are cleared"
     assert.equal(readFileSync(configPath, "utf8"), json);
     assert.equal(
       Boolean(classifyError(errorMessage(expectedDefaults.include[0]), config, true)),
-      expected.include.includes(expectedDefaults.include[0]),
+      expected.defaultRetry || expected.include.includes(expectedDefaults.include[0]),
       json,
     );
     assert.equal(
@@ -131,6 +142,7 @@ test("loaded rule lists do not mutate defaults or later loads", (t) => {
     if (configured) writeFileSync(join(agentDir, "pi-retry.json"), "{}");
     const config = loadConfig(agentDir);
     config.include.length = 0;
+    config.exclude.push("unexpected exclusion");
     config.compact.push("unexpected overflow");
     assert.deepEqual(loadConfig(agentDir), expectedDefaults);
   }
@@ -140,7 +152,7 @@ test("configured include strings append to defaults and match case-insensitively
   const agentDir = temporaryAgentDir(t);
   writeFileSync(
     join(agentDir, "pi-retry.json"),
-    JSON.stringify({ include: ["CUSTOM TRANSIENT FAILURE"], compact: [] }),
+    JSON.stringify({ defaultRetry: false, include: ["CUSTOM TRANSIENT FAILURE"], compact: [] }),
   );
 
   const config = loadConfig(agentDir);
@@ -158,7 +170,7 @@ test("configured include strings append to defaults and match case-insensitively
 
 test("duplicate configured matches still classify an error exactly once", (t) => {
   const agentDir = temporaryAgentDir(t);
-  writeFileSync(join(agentDir, "pi-retry.json"), JSON.stringify({ include: [expectedDefaults.include[0]] }));
+  writeFileSync(join(agentDir, "pi-retry.json"), JSON.stringify({ defaultRetry: false, include: [expectedDefaults.include[0]] }));
   const message = errorMessage(
     "Error: OpenAI API error (520): 520 status code (no body)",
   );
@@ -211,6 +223,12 @@ test("normalizes configured compact strings for native compaction recovery", (t)
   assert.equal(isRetryableAssistantError(normalized!), false);
   assert.equal(classifyError(original, config, true), undefined);
   assert.equal(classifyError(original, config, false), undefined);
+  for (const defaultRetry of [false, true]) {
+    const excluded = { ...config, defaultRetry, exclude: [...config.compact] };
+    assert.ok(normalizeContextOverflow(original, excluded.compact));
+    assert.equal(classifyError(original, excluded, true), undefined);
+    assert.equal(selectWaitMs(original, excluded, true), undefined);
+  }
   assert.equal(normalizeContextOverflow(normalized!, config.compact), undefined);
   assert.equal(normalizeContextOverflow(original, []), undefined);
   assert.equal(normalizeContextOverflow(errorMessage("HTTP 400 invalid request"), config.compact), undefined);
@@ -221,7 +239,6 @@ test("normalizes configured compact strings for native compaction recovery", (t)
 });
 
 test("does not override quota, billing, usage-limit, or context-overflow errors", () => {
-  const broad = { include: ["error", "credits"], compact: [] };
   const protectedErrors = [
     "OpenAI error: insufficient_quota",
     "Provider error: quota exceeded",
@@ -249,10 +266,13 @@ test("does not override quota, billing, usage-limit, or context-overflow errors"
     "Error: too many tokens",
   ];
 
-  for (const value of protectedErrors) {
-    assert.equal(classifyError(errorMessage(value), broad, true), undefined, value);
-    assert.equal(classifyError(errorMessage(value), { include: [value], compact: [] }, true), undefined, value);
-    assert.equal(normalizeContextOverflow(errorMessage(value), [value]), undefined, value);
+  for (const defaultRetry of [false, true]) {
+    const broad = { ...includeOnly, defaultRetry, include: ["error", "credits"] };
+    for (const value of protectedErrors) {
+      assert.equal(classifyError(errorMessage(value), broad, true), undefined, value);
+      assert.equal(selectWaitMs(errorMessage(value), { ...broad, include: [{ match: value, waitMs: 10 }] }, true), undefined, value);
+      assert.equal(normalizeContextOverflow(errorMessage(value), [value]), undefined, value);
+    }
   }
 });
 
@@ -260,17 +280,18 @@ test("leaves non-errors, unrelated errors, and native retryable errors unchanged
   const matchingSuccess = { ...errorMessage("custom error"), stopReason: "stop" as const };
   const matchingAbort = { ...errorMessage("custom error"), stopReason: "aborted" as const };
 
-  assert.equal(classifyError(errorMessage(""), { include: ["custom"], compact: [] }, true), undefined);
-  assert.equal(classifyError(matchingSuccess, { include: ["custom"], compact: [] }, true), undefined);
-  assert.equal(classifyError(matchingAbort, { include: ["custom"], compact: [] }, true), undefined);
+  const config = { ...includeOnly, defaultRetry: true, include: ["custom"] };
+  assert.equal(classifyError(errorMessage(""), config, true), undefined);
+  assert.equal(classifyError(matchingSuccess, config, true), undefined);
+  assert.equal(classifyError(matchingAbort, config, true), undefined);
   assert.equal(
-    classifyError(errorMessage("HTTP 400 invalid request"), { include: ["520"], compact: [] }, true),
+    classifyError(errorMessage("HTTP 400 invalid request"), { ...includeOnly, include: ["520"] }, true),
     undefined,
   );
   assert.equal(
     classifyError(
       errorMessage("OpenAI API error (503): service unavailable"),
-      { include: ["503"], compact: [] },
+      { ...includeOnly, include: ["503"] },
       true,
     ),
     undefined,
@@ -282,13 +303,17 @@ test("invalid configuration fails closed", (t) => {
   const configPath = join(agentDir, "pi-retry.json");
 
   writeFileSync(configPath, "not json");
-  assert.deepEqual(loadConfig(agentDir), { include: [], compact: [], disabled: true });
+  assert.deepEqual(loadConfig(agentDir), { ...includeOnly, disabled: true });
 
   for (const value of [
     null, [], false, 520, "invalid",
     { include: [520] }, { include: null }, { include: "error" },
     { compact: [520] }, { include: ["valid"], compact: null },
     { clearDefaults: "false" }, { clearDefaults: null }, { clearDefaults: 0 },
+    ...[null, 0, "false", [], {}].map((defaultRetry) => ({ defaultRetry })),
+    ...[null, "failure", [520], [{ match: "failure", waitMs: 0 }]].map((exclude) => ({
+      exclude, include: [{ match: "failure", waitMs: 10 }], compact: ["custom overflow"],
+    })),
     ...[
       { match: "error" }, { match: 502, waitMs: 1 },
       ...[-1, 0.5, "60", null, Number.MAX_SAFE_INTEGER + 1].map((waitMs) => ({ match: "error", waitMs })),
@@ -296,19 +321,24 @@ test("invalid configuration fails closed", (t) => {
   ]) {
     const json = JSON.stringify(value);
     writeFileSync(configPath, json);
-    assert.deepEqual(loadConfig(agentDir), { include: [], compact: [], disabled: true }, json);
+    const config = loadConfig(agentDir);
+    assert.deepEqual(config, { ...includeOnly, disabled: true }, json);
+    assert.equal(classifyError(errorMessage("custom failure"), config, true), undefined, json);
+    assert.equal(normalizeContextOverflow(errorMessage("custom overflow"), config.compact), undefined, json);
+    assert.equal(selectWaitMs(errorMessage('API error (502): {"retry_after":60}'), config, true), undefined, json);
   }
 });
 
 test("configuration read failures disable both rule sets", (t) => {
   const agentDir = temporaryAgentDir(t);
   mkdirSync(join(agentDir, "pi-retry.json"));
-  assert.deepEqual(loadConfig(agentDir), { include: [], compact: [], disabled: true });
+  assert.deepEqual(loadConfig(agentDir), { ...includeOnly, disabled: true });
 });
 
 test("timed include rules preserve explicit zero and literal matching", (t) => {
   const agentDir = temporaryAgentDir(t);
   writeFileSync(join(agentDir, "pi-retry.json"), JSON.stringify({
+    defaultRetry: false,
     clearDefaults: true,
     include: [" old error ", { match: " TRANSIENT.FAILURE ", waitMs: 0 }, { match: "  ", waitMs: 1000 }],
   }));
@@ -329,13 +359,13 @@ test("explicit user waits override server hints in both directions, including ze
     [[{ match: "502", waitMs: 10000 }, { match: "API ERROR", waitMs: 20000 }], 20000],
     [[{ match: "503", waitMs: 0 }], 60000],
   ] satisfies [RetryConfig["include"], number][]) {
-    assert.equal(selectWaitMs(message, { include, compact: [] }, true), expected);
-    assert.equal(classifyError(message, { include, compact: [] }, true), undefined);
+    assert.equal(selectWaitMs(message, { ...includeOnly, include }, true), expected);
+    assert.equal(classifyError(message, { ...includeOnly, include }, true), undefined);
   }
 });
 
 test("server hints require valid JSON numbers and do not establish retry eligibility", () => {
-  const config: RetryConfig = { include: [], compact: [] };
+  const config = includeOnly;
   for (const [seconds, expected] of [[0, 0], [0.2501, 251], [60, 60000], ["60", undefined],
     [null, undefined], [-1, undefined], [true, undefined], [1e300, undefined]] as const) {
     const message = errorMessage(`API error (502): ${JSON.stringify({ retry_after: seconds })}`);
@@ -348,14 +378,14 @@ test("server hints require valid JSON numbers and do not establish retry eligibi
   ]) assert.equal(selectWaitMs(errorMessage(text), config, true), undefined, text);
 
   const custom = errorMessage('custom failure {"retry_after":0.1}');
-  const included = { include: ["custom failure"], compact: [] };
+  const included = { ...includeOnly, include: ["custom failure"] };
   const marked = classifyError(custom, included, true)!;
   assert.equal(selectWaitMs(marked, included, true), 100);
 });
 
 test("internal classification markers do not participate in waiting rules", () => {
   for (const waitMs of [0, 90000]) {
-    const config: RetryConfig = { include: ["custom transient failure", { match: "provider returned error", waitMs }], compact: [] };
+    const config: RetryConfig = { ...includeOnly, include: ["custom transient failure", { match: "provider returned error", waitMs }] };
     for (const [text, expected] of [
       ['custom transient failure {"retry_after":0.3}', 300],
       ["custom transient failure", undefined],
@@ -372,8 +402,88 @@ test("internal classification markers do not participate in waiting rules", () =
   }
 });
 
+test("default policy and includes permit recovery unless an exclusion wins", () => {
+  const original = errorMessage('custom gateway failure {"retry_after":0.3}');
+  const snapshot = structuredClone(original);
+  assert.equal(isRetryableAssistantError(original), false);
+  for (const defaultRetry of [false, true]) {
+    for (const included of [false, true]) {
+      for (const excluded of [false, true]) {
+        const config: RetryConfig = {
+          ...includeOnly, defaultRetry,
+          include: included ? ["custom gateway failure"] : [],
+          exclude: excluded ? ["GATEWAY FAILURE"] : [],
+        };
+        const allowed = !excluded && (defaultRetry || included);
+        const label = JSON.stringify(config);
+        const marked = classifyError(original, config, true);
+        assert.equal(Boolean(marked), allowed, label);
+        assert.equal(selectWaitMs(marked ?? original, config, true), allowed ? 300 : undefined, label);
+        if (marked) {
+          assert.ok(marked.errorMessage?.startsWith(original.errorMessage!));
+          assert.equal(isRetryableAssistantError(marked), true);
+          assert.equal(classifyError(marked, config, true), undefined);
+        }
+        assert.deepEqual(original, snapshot);
+      }
+    }
+  }
+});
+
+test("exclude strings are literal and ignore blanks after loading", (t) => {
+  const agentDir = temporaryAgentDir(t);
+  writeFileSync(join(agentDir, "pi-retry.json"), JSON.stringify({
+    clearDefaults: true, exclude: ["  ", " TERMINAL.FAILURE ", "*"],
+  }));
+  const config = loadConfig(agentDir);
+  for (const [text, allowed] of [
+    ["terminal.failure", false], ["terminalXfailure", true],
+    ["custom * failure", false], ["custom failure", true],
+  ] as const) {
+    assert.equal(Boolean(classifyError(errorMessage(text), config, true)), allowed, text);
+  }
+});
+
+test("exclude suppresses timed and server waiting without changing native failures", () => {
+  const native = errorMessage('503 service unavailable {"retry_after":0.3}');
+  const custom = errorMessage('custom gateway failure {"retry_after":0.3}');
+  assert.equal(isRetryableAssistantError(native), true);
+  assert.equal(isRetryableAssistantError(custom), false);
+  for (const defaultRetry of [false, true]) {
+    for (const message of [native, custom]) {
+      const snapshot = structuredClone(message);
+      const text = message === native ? "service unavailable" : "custom gateway failure";
+      const config: RetryConfig = {
+        ...includeOnly, defaultRetry, exclude: [text],
+        include: [{ match: text, waitMs: 1000 }, { match: text, waitMs: 0 }],
+      };
+      for (const include of [config.include, [...config.include].reverse(), []]) {
+        assert.equal(classifyError(message, { ...config, include }, true), undefined);
+        assert.equal(selectWaitMs(message, { ...config, include }, true), undefined);
+      }
+      assert.deepEqual(message, snapshot);
+      if (message === native) {
+        assert.equal(classifyError(message, { ...config, exclude: [] }, true), undefined);
+        assert.equal(selectWaitMs(message, { ...config, exclude: [] }, true), 1000);
+        assert.equal(selectWaitMs(message, { ...config, exclude: [], include: [] }, true), 300);
+      }
+    }
+  }
+});
+
+test("generated hints do not activate exclude rules or suppress server waiting", () => {
+  const config = { ...includeOnly, defaultRetry: true, exclude: ["provider returned error"] };
+  const original = errorMessage('custom failure {"retry_after":0.3}');
+  const marked = classifyError(original, config, true)!;
+  assert.ok(marked?.errorMessage?.includes(RETRY_MARKER));
+  const snapshot = structuredClone(marked);
+  assert.equal(selectWaitMs(marked, config, true), 300);
+  assert.deepEqual(marked, snapshot);
+  assert.equal(selectWaitMs(errorMessage('provider returned error {"retry_after":0.3}'), config, true), undefined);
+});
+
 test("cooldowns preserve disabled retry, fail-closed configuration, exclusions and protections", () => {
-  const config: RetryConfig = { include: [{ match: "error", waitMs: 10 }], compact: ["custom overflow"] };
+  const config: RetryConfig = { ...includeOnly, defaultRetry: true, include: [{ match: "error", waitMs: 10 }], compact: ["custom overflow"] };
   for (const text of ["HTTP 502 quota error", "HTTP 502 billing error", "error custom overflow", "error context_length_exceeded"]) {
     assert.equal(selectWaitMs(errorMessage(text), config, true), undefined, text);
   }

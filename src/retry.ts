@@ -35,6 +35,8 @@ export const RETRY_MARKER = "[pi-retry]";
 export type IncludeRule = string | { match: string; waitMs: number };
 
 export interface RetryConfig {
+  defaultRetry: boolean;
+  exclude: string[];
   include: IncludeRule[];
   compact: string[];
   disabled?: true;
@@ -58,18 +60,21 @@ const PROTECTED_LIMIT_PATTERN =
 
 export function loadConfig(agentDir = getAgentDir()): RetryConfig {
   const path = join(agentDir, CONFIG_FILE);
-  const disabled: RetryConfig = { include: [], compact: [], disabled: true };
+  const disabled: RetryConfig = { defaultRetry: false, exclude: [], include: [], compact: [], disabled: true };
   try {
     const value: unknown = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
     if (!value || typeof value !== "object" || Array.isArray(value)) return disabled;
 
-    const { include = [], compact = [], clearDefaults = false } = value as {
+    const { defaultRetry = true, exclude = [], include = [], compact = [], clearDefaults = false } = value as {
+      defaultRetry?: unknown;
+      exclude?: unknown;
       include?: unknown;
       compact?: unknown;
       clearDefaults?: unknown;
     };
     if (
-      typeof clearDefaults !== "boolean" ||
+      typeof defaultRetry !== "boolean" || typeof clearDefaults !== "boolean" ||
+      !Array.isArray(exclude) || exclude.some((item) => typeof item !== "string") ||
       !Array.isArray(include) || !include.every(isIncludeRule) ||
       !Array.isArray(compact) || compact.some((item) => typeof item !== "string")
     ) return disabled;
@@ -78,6 +83,8 @@ export function loadConfig(agentDir = getAgentDir()): RetryConfig {
       ? rule.trim()
       : { match: rule.match.trim(), waitMs: rule.waitMs });
     return {
+      defaultRetry,
+      exclude: exclude.map((item) => item.trim()).filter(Boolean),
       include: [...(clearDefaults ? [] : DEFAULT_INCLUDE), ...rules.filter((rule) => matchText(rule).length > 0)],
       compact: [...(clearDefaults ? [] : DEFAULT_COMPACT), ...compact.map((item) => item.trim()).filter(Boolean)],
     };
@@ -116,7 +123,7 @@ function canRecover(
 ): boolean {
   if (config.disabled || !retryEnabled || message.stopReason !== "error" || !message.errorMessage) return false;
   if (PROTECTED_LIMIT_PATTERN.test(message.errorMessage)) return false;
-  if (matches(message, config.compact) || isContextOverflow(message)) return false;
+  if (matches(message, config.exclude) || matches(message, config.compact) || isContextOverflow(message)) return false;
   const error = message.errorMessage.toLowerCase();
   return !excluded.some((pattern) => pattern.trim() && error.includes(pattern.trim().toLowerCase()));
 }
@@ -129,7 +136,7 @@ export function classifyError(
 ): AssistantMessage | undefined {
   if (!canRecover(message, config, retryEnabled, excluded)) return;
   if (message.errorMessage!.includes(RETRY_MARKER) || isRetryableAssistantError(message)) return;
-  if (!matches(message, config.include)) return;
+  if (!config.defaultRetry && !matches(message, config.include)) return;
   return { ...message, errorMessage: `${message.errorMessage}${RETRY_HINT}` };
 }
 
@@ -144,7 +151,7 @@ export function selectWaitMs(
     message = { ...message, errorMessage: message.errorMessage.slice(0, -RETRY_HINT.length) };
   }
   if (!canRecover(message, config, retryEnabled, excluded)) return;
-  if (!isRetryableAssistantError(message) && !matches(message, config.include)) return;
+  if (!isRetryableAssistantError(message) && !config.defaultRetry && !matches(message, config.include)) return;
 
   let configured: number | undefined;
   for (const rule of config.include) {
