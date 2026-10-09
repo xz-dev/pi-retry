@@ -1,55 +1,4 @@
-# Error Recovery Specification
-
-## Purpose
-
-Provide predictable recovery hints for provider errors that Pi does not already classify, with useful built-in rules and explicit user control while leaving retry and compaction execution to Pi.
-
-## Requirements
-
-### Requirement: Global configuration lifecycle
-
-The extension SHALL read recovery configuration from `$PI_CODING_AGENT_DIR/pi-retry.json`, normally `~/.pi/agent/pi-retry.json`, when the extension loads. It SHALL NOT load project-local recovery rules or rewrite the user's configuration file. A reload or restart SHALL be required to apply subsequent configuration-file changes.
-
-#### Scenario: Configuration changes take effect on reload
-
-- **GIVEN** the extension has loaded its global recovery configuration
-- **WHEN** the user edits that configuration file
-- **THEN** the active rule sets remain unchanged until the extension reloads or Pi restarts
-- **AND** the next load uses the updated global configuration
-
-### Requirement: Built-in recovery rules
-
-The extension SHALL provide the following built-in rule sets without requiring a configuration file. These strings SHALL be shipped with the extension rather than obtained from a maintainer's local files:
-
-| Rule set | Literal substring |
-| --- | --- |
-| include | `OpenAI API error (520): 520 status code (no body)` |
-| include | `OpenAI API error (522): 522 status code (no body)` |
-| include | `OpenAI API error (530): 530 status code (no body)` |
-| include | `unknown certificate verification error` |
-| include | `upstream_error: Upstream request failed` |
-| include | `Upstream stream failed before completion.` |
-| include | `stream disconnected before completion` |
-| include | `Service temporarily unavailable due to resource pressure. Retry shortly.` |
-| include | `Upstream service temporarily unavailable` |
-| include | `are cooling down (reset after 5s)` |
-| include | `Responses WebSocket closed (1006): Connection ended` |
-| include | `Connection error.` |
-| include | `unexpected EOF.` |
-| compact | `Reduce the prompt or route to a model with a larger input limit` |
-
-Built-in matches SHALL remain subject to the recovery eligibility, precedence, and protection requirements below; inclusion in this table does not force a second classification of an error Pi already recognizes.
-
-#### Scenario: No configuration file
-
-- **WHEN** the extension loads without a global recovery configuration file
-- **THEN** all 13 built-in include rules and the built-in compact rule are available
-- **AND** no configuration file is created
-
-#### Scenario: Empty configuration object
-
-- **WHEN** the extension loads `{}` as its global recovery configuration
-- **THEN** the same built-in rule sets are available as when no configuration file exists
+## MODIFIED Requirements
 
 ### Requirement: User rules append by default
 
@@ -77,22 +26,6 @@ The configuration SHALL accept an optional `include` array whose entries are str
 - **WHEN** the configuration contains `"custom transient error"` and `{ "match": "API error (502)", "waitMs": 60000 }` in `include`
 - **THEN** both entries participate in retry classification
 - **AND** only the object entry explicitly selects a configured waiting interval
-
-### Requirement: Explicit clearing of both default rule sets
-
-The configuration SHALL accept optional boolean `clearDefaults`, defaulting to `false`. When it is `true`, the extension SHALL omit both built-in lists before adding user entries. Omitted arrays SHALL then contribute empty lists. Clearing defaults SHALL NOT disable or reconfigure Pi's native retry or compaction policies.
-
-#### Scenario: Replace defaults with user rules
-
-- **WHEN** the configuration is `{ "clearDefaults": true, "include": ["custom transient error"], "compact": ["custom input overflow"] }`
-- **THEN** only the supplied user rules are available for pi-retry's additional classification
-- **AND** none of the built-in rules are retained implicitly
-
-#### Scenario: Disable all additional classification
-
-- **WHEN** the configuration is `{ "clearDefaults": true }`
-- **THEN** pi-retry adds no retry or compact classifications
-- **AND** Pi's native recovery behavior remains unaffected
 
 ### Requirement: Literal matching and fail-closed validation
 
@@ -187,6 +120,8 @@ Quota, usage-limit, budget, billing, payment, account-balance, exhausted-credit,
 - **WHEN** the finalized error reports `Provider quota exceeded`, `HTTP 402 Payment Required`, `Account credits exhausted`, or `Monthly usage limit reached`
 - **THEN** pi-retry leaves that error unchanged
 - **AND** neither a timed include match nor a server retry hint schedules an extension cooldown
+
+## ADDED Requirements
 
 ### Requirement: User waiting overrides server retry hints
 
