@@ -407,3 +407,30 @@ test("a long configured cooldown is cancellable without overflowing a platform t
   assert.equal(requests.length, 1);
   assert.deepEqual(warnings, []);
 });
+
+test("a cancelled cooldown is forgotten by the next non-message run", { timeout: 5000 }, async (t) => {
+  let reached!: () => void;
+  const waiting = new Promise<void>((resolve) => { reached = resolve; });
+  let calls = 0;
+  const { session, requests, statuses } = await setup(t, (pi) => {
+    pi.on("context", () => { if (++calls === 2) reached(); });
+  }, { ui: true, failures: 2, config: { include: [{ match: "502", waitMs: 1000 }] } });
+  const prompt = session.prompt("Cancel, then continue through a custom-message turn.");
+  await waiting;
+  await sleep(20);
+  await session.abort();
+  await prompt;
+  assert.equal(requests.length, 1);
+  const freshAt = performance.now();
+  // Watchdog-style continuation: custom message, no pi-retry clear() on this path.
+  await session.sendCustomMessage(
+    { customType: "test:continuation", content: "Continue.", display: false },
+    { triggerTurn: true },
+  );
+  // The steering hook may deliver the custom message after this settles; a
+  // third provider call would be the cancelled retry finally escaping.
+  assert.ok(requests.length <= 3);
+  const interval = requests[1] - freshAt;
+  assert.ok(interval < 500, `cancelled cooldown leaked into the next run: ${interval}ms`);
+  assert.equal(statuses.at(-1), undefined);
+});

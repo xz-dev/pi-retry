@@ -272,6 +272,9 @@ export default function retry(pi: ExtensionAPI, agentDir = getAgentDir()): void 
       signal.removeEventListener("abort", active.clearStatus);
       if (waiting === active) {
         waiting = undefined;
+        // A user abort ends this failure's recovery: drop the retained
+        // cooldown so a later unrelated run cannot inherit the stale wait.
+        if (signal.aborted) pending = undefined;
         active.clearStatus();
       }
     }
